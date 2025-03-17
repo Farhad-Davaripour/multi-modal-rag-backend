@@ -76,7 +76,7 @@ DOCUMENT_SUMMARY_DICT_PATH = os.getenv("DOCUMENT_SUMMARY_DICT_PATH", "cached/doc
 DOCUMENT_URL_DICT_PATH = os.getenv("DOCUMENT_URL_DICT_PATH", "cached/document_url.json")
 IMAGES_DIR = os.getenv("IMAGES_DIR", "images")
 CONCURRENT_UPLOADS = int(os.getenv("CONCURRENT_UPLOADS", 5)) 
-SIMILARITY_TOP_K = int(os.getenv("SIMILARITY_TOP_K", 3))
+SIMILARITY_TOP_K = int(os.getenv("SIMILARITY_TOP_K", 5))
 SHAREPOINT_FILES_CONTAINER = os.getenv("SHAREPOINT_FILES_CONTAINER")
 METADATA_FILES_CONTAINER = os.getenv("METADATA_FILES_CONTAINER")
 
@@ -163,12 +163,12 @@ QA_PROMPT = PromptTemplate(QA_PROMPT_TMPL)
 
 import time
 
-def robust_get_json_result(parser, file_path, max_retries=3, sleep_secs=2):
+def robust_get_json_result(parser, file_path, max_retries=3):
     for attempt in range(max_retries):
         md_json_objs = parser.get_json_result(file_path)
         if md_json_objs and "pages" in md_json_objs[0]:
             return md_json_objs
-        time.sleep(sleep_secs)
+        # time.sleep(sleep_secs)
     raise ValueError(f"Parser failed to return 'pages' after {max_retries} attempts.")
 
 def get_images_from_doc(file_path: str, DOWNLOAD_PATH: str, parser) -> List[Dict]:
@@ -416,49 +416,87 @@ class MultimodalQueryEngine(CustomQueryEngine):
         self.reranker = SentenceTransformerRerank(
             model="cross-encoder/ms-marco-MiniLM-L-2-v2", top_n=reranker_top_n
         )  # Initialize the reranker
+        logger.info("Initialized MultimodalQueryEngine with reranker_top_n=%d", reranker_top_n)
 
     def custom_query(self, query_str: str) -> Response:
+        logger.info("Starting custom_query with query_str: %s", query_str)
+
         # Retrieve relevant nodes
-        nodes = self.retriever.retrieve(query_str)
+        try:
+            nodes = self.retriever.retrieve(query_str)
+            logger.info("Retrieved %d nodes", len(nodes))
+        except Exception as e:
+            logger.error("Failed to retrieve nodes: %s", str(e))
+            raise
 
         # Rerank the nodes using the specified reranker
         if self.reranker:
-            nodes = self.reranker.postprocess_nodes(nodes, query_str=query_str)
+            try:
+                nodes = self.reranker.postprocess_nodes(nodes, query_str=query_str)
+                logger.info("Reranked nodes, now %d nodes", len(nodes))
+            except Exception as e:
+                logger.error("Failed to rerank nodes: %s", str(e))
+                raise
 
         # Create ImageNode items directly using the blob URLs
         image_nodes = []
         for n in nodes:
             if "image_path" in n.metadata:
                 try:
-                    image_nodes.append(
-                        NodeWithScore(
-                            node=ImageNode(image_url=n.metadata["image_path"])
-                        )
+                    image_node = NodeWithScore(
+                        node=ImageNode(image_url=n.metadata["image_path"])
                     )
+                    image_nodes.append(image_node)
+                    logger.info("Created ImageNode for: %s", n.metadata["image_path"])
                 except Exception as e:
-                    print(
-                        f"Warning: Failed to create ImageNode for {n.metadata['image_path']}: {str(e)}"
+                    logger.warning(
+                        "Failed to create ImageNode for %s: %s",
+                        n.metadata["image_path"],
+                        str(e),
                     )
-                    continue
 
         # Create context string from text nodes
-        context_str = "\n\n".join(
-            [node.get_content(metadata_mode=MetadataMode.LLM) for node in nodes]
-        )
+        try:
+            context_str = "\n\n".join(
+                [node.get_content(metadata_mode=MetadataMode.LLM) for node in nodes]
+            )
+            logger.info("Created context string with length: %d", len(context_str))
+        except Exception as e:
+            logger.error("Failed to create context string: %s", str(e))
+            raise
 
         # Format the prompt
-        fmt_prompt = self.qa_prompt.format(context_str=context_str, query_str=query_str)
-        # Get response from multimodal LLM
-        llm_response = self.multi_modal_llm.complete(
-            prompt=fmt_prompt,
-            image_documents=[image_node.node for image_node in image_nodes],
-        )
+        try:
+            fmt_prompt = self.qa_prompt.format(context_str=context_str, query_str=query_str)
+            logger.info("Formatted prompt successfully")
+        except Exception as e:
+            logger.error("Failed to format prompt: %s", str(e))
+            raise
 
-        return Response(
-            response=str(llm_response),
-            source_nodes=nodes,
-            metadata={"text_nodes": nodes, "image_nodes": image_nodes},
-        )
+        # Get response from multimodal LLM
+        try:
+            llm_response = self.multi_modal_llm.complete(
+                prompt=fmt_prompt,
+                # image_documents=[image_node.node for image_node in image_nodes],
+                image_documents=None
+            )
+            logger.info("Received response from multi_modal_llm")
+        except Exception as e:
+            logger.error("Failed to get response from multi_modal_llm: %s", str(e))
+            raise
+
+        # Return the response
+        try:
+            response = Response(
+                response=str(llm_response),
+                source_nodes=nodes,
+                metadata={"text_nodes": nodes, "image_nodes": image_nodes},
+            )
+            logger.info("Created response object successfully")
+            return response
+        except Exception as e:
+            logger.error("Failed to create response object: %s", str(e))
+            raise
     
 def display_query_and_multimodal_response(
     response: Response, plot_height: int = 2, plot_width: int = 5
@@ -601,9 +639,45 @@ def download_sharepoint_files():
   
     return document_url_dict
 
+def get_uploaded_index_n_docs_summary_n_document_url():
+
+    # Grab a reference to your SharePoint files container
+    blob_service_client = BlobServiceClientSync.from_connection_string(BLOB_CONNECTION_STRING)
+    container_client = blob_service_client.get_container_client(SHAREPOINT_FILES_CONTAINER)
+
+    # List all blobs (files) in the SharePoint container
+    all_blobs = container_client.list_blobs()
+
+    # Define supported extensions
+    SUPPORTED_EXTENSIONS = [".pdf", ".pptx"]
+
+    indexes = {} 
+
+    # Loop through each file in the directory
+    for blob in all_blobs:
+        file_name = blob.name
+
+        if any(file_name.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS): 
+            curated_file_name = os.path.splitext(file_name.lower())[0]
+            INDEX_NAME = f"{curated_file_name.replace('-', '_')}"
+            logger.info(f"Index Name: {INDEX_NAME}")
+
+            indexes[INDEX_NAME] = create_or_load_index(
+            text_nodes=[],
+            index_client=index_client,
+            index_name=INDEX_NAME,
+            embed_model=embed_model,
+            llm=llm,
+            metadata_fields=metadata_fields,
+            use_existing_index=True
+            )
+
+    document_summary_dict = load_json_dict_from_blob_storage("document_summary.json")
+    document_url_dict = load_json_dict_from_blob_storage("document_url.json")
+    
+    return indexes, document_summary_dict, document_url_dict
+
 def get_index_docs_summary():
-    # Get all files in the LOCAL_BASE_DIR
-    # files = os.listdir(LOCAL_BASE_DIR)
 
     # Grab a reference to your SharePoint files container
     blob_service_client = BlobServiceClientSync.from_connection_string(BLOB_CONNECTION_STRING)

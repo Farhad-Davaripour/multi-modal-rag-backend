@@ -24,7 +24,8 @@ importlib.reload(tools)
 from src.tools import (
     download_sharepoint_files,
     get_index_docs_summary,
-    multimodal_query_engine
+    multimodal_query_engine,
+    get_uploaded_index_n_docs_summary_n_document_url
 )
 
 # Load environment variables
@@ -211,12 +212,8 @@ def handle_query(
 
     logger.info("Starting up and preparing environment...")
 
-    # 1. Download files from SharePoint
-    document_url_dict = download_sharepoint_files()
-    logger.info(f"Downloaded documents. Found {len(document_url_dict)} files.")
-
-    # 2. Build or load indexes and summaries
-    indexes, document_summary_dict = get_index_docs_summary()
+    # 1. load indexes and summaries
+    indexes, document_summary_dict, document_url_dict = get_uploaded_index_n_docs_summary_n_document_url()
     if not indexes:
         logger.warning("No indexes were created. Check if documents were successfully processed.")
     else:
@@ -264,12 +261,41 @@ def handle_query(
         image_nodes = response.metadata.get("image_nodes", [])
         image_urls = [scored_img.node.image_url for scored_img in image_nodes if scored_img.node.image_url]
 
-        return {"response": response.response, "images": image_urls}
+        retrieved_document = document_url_dict[selected_index]
+
+        return {"response": response.response, "images": image_urls, "retrieved_document": retrieved_document}
 
     except Exception as e:
         logger.error(f"Error processing query: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while processing the query.")
-    
+
+@app.post(
+    "/index_new_documents",
+    summary="Index new documents",
+    description="Endpoint to download documents and build new indexes",
+    tags=["Protected"],
+    openapi_extra={"security": [{"BearerAuth": []}]},
+)
+def handle_index_new_documents(
+    input_data: QueryModel,
+    user_payload: dict = Depends(verify_jwt),
+):
+    logger.info("Starting up and preparing environment to index new docs...")
+
+    # 1. Download files from SharePoint
+    document_url_dict = download_sharepoint_files()
+    logger.info(f"Downloaded documents. Found {len(document_url_dict)} files.")
+
+    # 2. Build or load indexes and summaries
+    indexes, document_summary_dict = get_index_docs_summary()
+    if not indexes:
+        logger.warning("No indexes were created. Check if documents were successfully processed.")
+    else:
+        logger.info("Indexes and summaries prepared successfully.")
+
+    # Simply return the summaries without any query logic:
+    return {"document_summary_dict": document_summary_dict}
+
 @app.get(
     "/status",
     summary="API Status Check",
