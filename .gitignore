@@ -23,3 +23,7 @@ superseded_ui/
 tls/  
 miscellaneous/  
 *.tmp  
+
+notebooks
+infra/*
+docs

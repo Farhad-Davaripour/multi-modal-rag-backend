@@ -31,3 +31,6 @@ flask_app.py
 # Ignore other unused folders
 images/
 demo_polished/
+
+.github/
+infra/
