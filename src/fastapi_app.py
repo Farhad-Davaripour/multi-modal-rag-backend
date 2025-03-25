@@ -4,7 +4,7 @@ import logging
 import requests
 import jwt
 import base64
-from fastapi import Request, FastAPI, HTTPException, Depends, Security
+from fastapi import Request, FastAPI, HTTPException, Depends, Security, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.openapi.utils import get_openapi
@@ -149,14 +149,9 @@ def verify_jwt(creds: HTTPAuthorizationCredentials = Security(bearer_scheme)):
 # -----------------------------------------------------------------------------------------
 app = FastAPI()
 
-origins = [
-    "https://multimodalrag-frontend.azurewebsites.net",  # the front-end domain
-    "http://localhost:3000", # "http://localhost:3000" for local dev
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,       # or ["*"] in a pinch
+    allow_origins=["https://multimodalrag-frontend.azurewebsites.net"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -194,6 +189,13 @@ app.openapi = custom_openapi
 # -----------------------------------------------------------------------------------------
 class QueryModel(BaseModel):
     query: str  # The user query
+
+@app.options("/query", include_in_schema=False)
+def options_query():
+    """
+    Return 200 so the browser's CORS preflight can succeed.
+    """
+    return Response(status_code=200)
 
 @app.post(
     "/query",
