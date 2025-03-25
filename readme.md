@@ -11,6 +11,13 @@ This repository shows how to build a **FastAPI** application, containerize it wi
 3. **Docker** installed locally (to build the FastAPI container image).
 4. **Azure Subscription** (with permission to create resource groups, app services, etc.).
 
+**App Registration for Backend**  
+You need to set up an Azure AD app registration and extract the following variables from it. These are used for authentication and security, ensuring only approved users can access the FastAPI endpoint.
+
+- AUD  
+- APP_REGISTRATION_CLIENT_ID  
+- APP_REGISTRATION_CLIENT_SECRET  
+- APP_REGISTRATION_RESOURCE_SCOPE
 ---
 
 ## 2. Why Two Storage Accounts?
