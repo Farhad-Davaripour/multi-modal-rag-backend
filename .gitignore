@@ -24,6 +24,10 @@ tls/
 miscellaneous/  
 *.tmp  
 
+# Notebooks and Documentation
 notebooks
-infra/*
 docs
+
+# Infrastructure Files
+infra/*
+!infra/main.tf
