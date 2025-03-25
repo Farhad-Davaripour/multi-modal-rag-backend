@@ -1,0 +1,182 @@
+name: deploy_dev
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build_test_push_terraform:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      # # Cache Python dependencies to speed up installs
+      # - name: Cache Python dependencies
+      #   uses: actions/cache@v3
+      #   with:
+      #     path: ~/.cache/pip
+      #     key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-pip-
+
+      # - name: Install dependencies
+      #   run: |
+      #     pip install --upgrade pip
+      #     pip install -r requirements.txt
+
+      - name: Azure Login (Service Principal)
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.TENANT_ID }}"
+            }
+          allow-no-subscriptions: true
+
+      - name: Confirm Azure login
+        run: az account show
+
+      - name: Build Docker image
+        run: docker build -t fastapi-app .
+
+      - name: Tag Docker image
+        run: docker tag fastapi-app ${{ secrets.PROJECT_NAME }}.azurecr.io/fastapi-app:${{ github.sha }}
+
+      - name: Log in to ACR
+        run: az acr login --name ${{ secrets.PROJECT_NAME }}
+
+      - name: Push Docker image
+        run: docker push ${{ secrets.PROJECT_NAME }}.azurecr.io/fastapi-app:${{ github.sha }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.4.5
+
+      - name: Export Azure env vars for Terraform
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        run: |
+          terraform -chdir=infra init \
+            -backend-config="resource_group_name=${{ secrets.RESOURCE_GROUP_NAME }}" \
+            -backend-config="storage_account_name=${{ secrets.STORAGE_ACCOUNT_NAME }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=terraform.state" \
+            -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -backend-config="tenant_id=${{ secrets.TENANT_ID }}" \
+            -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            -backend-config="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}"
+ 
+      # Import existing resources if needed
+      # - name: Import Resource Group
+      #   run: |
+      #     terraform -chdir=infra import \
+      #       azurerm_resource_group.main \
+      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}" \
+      #       || echo "RG already imported or doesn't exist."
+
+      # - name: Import Search Service
+      #   run: |
+      #     terraform -chdir=infra import \
+      #       azurerm_search_service.search \
+      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.Search/searchServices/rag-demo-public-financial-data" \
+      #       || echo "Search Service already imported or doesn't exist."
+
+      # - name: Import Container Registry
+      #   run: |
+      #     terraform -chdir=infra import \
+      #       azurerm_container_registry.acr \
+      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.ContainerRegistry/registries/${{ secrets.PROJECT_NAME }}" \
+      #       || echo "ACR already imported or doesn't exist."
+
+      # - name: Import Key Vault
+      #   run: |
+      #     terraform -chdir=infra import \
+      #       azurerm_key_vault.kv \
+      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.KeyVault/vaults/${{ secrets.PROJECT_NAME }}-KeyVault" \
+      #       || echo "Key Vault already imported or doesn't exist."
+
+      # - name: Import Terraform User Key Vault Access Policy
+      #   run: |
+      #     TF_SP_OBJ_ID=$(az ad sp show \
+      #       --id ${{ secrets.AZURE_CLIENT_ID }} \
+      #       --query objectId -o tsv)
+      #     terraform -chdir=infra import \
+      #       azurerm_key_vault_access_policy.terraform_user \
+      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.KeyVault/vaults/${{ secrets.PROJECT_NAME }}-KeyVault/objectId/$TF_SP_OBJ_ID" \
+      #       || echo "terraform_user Key Vault Access Policy already imported or doesn't exist."
+
+      # - name: Import App Service Plan
+      #   run: |
+      #     terraform -chdir=infra import \
+      #       azurerm_app_service_plan.asp \
+      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.Web/serverFarms/${{ secrets.PROJECT_NAME }}-backend-plan" \
+      #       || echo "ASP already imported or doesn't exist."
+
+      # - name: Import Web App
+      #   run: |
+      #     terraform -chdir=infra import \
+      #       azurerm_app_service.backend \
+      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.Web/sites/${{ secrets.PROJECT_NAME }}-backend" \
+      #       || echo "App Service already imported or doesn't exist."
+
+      - name: Terraform Plan
+        run: |
+          terraform -chdir=infra plan \
+            -var="env_map={
+              APP_REGISTRATION_CLIENT_ID=\"${{ secrets.APP_REGISTRATION_CLIENT_ID }}\",
+              APP_REGISTRATION_CLIENT_SECRET=\"${{ secrets.APP_REGISTRATION_CLIENT_SECRET }}\",
+              APP_REGISTRATION_RESOURCE_SCOPE=\"${{ secrets.APP_REGISTRATION_RESOURCE_SCOPE }}\",
+              AUD=\"${{ secrets.AUD }}\",
+              AZURE_OPENAI_API_KEY=\"${{ secrets.AZURE_OPENAI_API_KEY }}\",
+              AZURE_OPENAI_CHAT_COMPLETION_DEPLOYED_MODEL_NAME=\"${{ secrets.AZURE_OPENAI_CHAT_COMPLETION_DEPLOYED_MODEL_NAME }}\",
+              AZURE_OPENAI_EMBEDDING_DEPLOYED_MODEL_NAME=\"${{ secrets.AZURE_OPENAI_EMBEDDING_DEPLOYED_MODEL_NAME }}\",
+              AZURE_OPENAI_ENDPOINT=\"${{ secrets.AZURE_OPENAI_ENDPOINT }}\",
+              AZURE_SEARCH_ADMIN_KEY=\"${{ secrets.AZURE_SEARCH_ADMIN_KEY }}\",
+              AZURE_SEARCH_SERVICE_ENDPOINT=\"${{ secrets.AZURE_SEARCH_SERVICE_ENDPOINT }}\",
+              BASE_FOLDER=\"${{ secrets.BASE_FOLDER }}\",
+              BLOB_CONNECTION_STRING=\"${{ secrets.BLOB_CONNECTION_STRING }}\",
+              BLOB_STORAGE_ACCOUNT_KEY=\"${{ secrets.BLOB_STORAGE_ACCOUNT_KEY }}\",
+              CLIENT_ID=\"${{ secrets.CLIENT_ID }}\",
+              CLIENT_SECRET=\"${{ secrets.CLIENT_SECRET }}\",
+              CONCURRENT_UPLOADS=\"${{ secrets.CONCURRENT_UPLOADS }}\",
+              DOCUMENT_SUMMARY_DICT_PATH=\"${{ secrets.DOCUMENT_SUMMARY_DICT_PATH }}\",
+              DOCUMENT_URL_DICT_PATH=\"${{ secrets.DOCUMENT_URL_DICT_PATH }}\",
+              IMAGES_DIR=\"${{ secrets.IMAGES_DIR }}\",
+              LLAMA_CLOUD_API_KEY=\"${{ secrets.LLAMA_CLOUD_API_KEY }}\",
+              LOCAL_BASE_DIR=\"${{ secrets.LOCAL_BASE_DIR }}\",
+              METADATA_FILES_CONTAINER=\"${{ secrets.METADATA_FILES_CONTAINER }}\",
+              PROJECT_NAME=\"${{ secrets.PROJECT_NAME }}\",
+              RESOURCE_GROUP_NAME=\"${{ secrets.RESOURCE_GROUP_NAME }}\",
+              AZURE_SUBSCRIPTION_ID=\"${{ secrets.AZURE_SUBSCRIPTION_ID }}\",
+              AZURE_CLIENT_ID=\"${{ secrets.AZURE_CLIENT_ID }}\",
+              AZURE_CLIENT_SECRET=\"${{ secrets.AZURE_CLIENT_SECRET }}\",
+              SHAREPOINT_DOMAIN=\"${{ secrets.SHAREPOINT_DOMAIN }}\",
+              SHAREPOINT_FILES_CONTAINER=\"${{ secrets.SHAREPOINT_FILES_CONTAINER }}\",
+              SHAREPOINT_SITE=\"${{ secrets.SHAREPOINT_SITE }}\",
+              SIMILARITY_TOP_K=\"${{ secrets.SIMILARITY_TOP_K }}\",
+              TENANT_ID=\"${{ secrets.TENANT_ID }}\"
+            }" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform -chdir=infra apply -auto-approve tfplan
