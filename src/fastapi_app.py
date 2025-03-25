@@ -190,13 +190,6 @@ app.openapi = custom_openapi
 class QueryModel(BaseModel):
     query: str  # The user query
 
-@app.options("/query", include_in_schema=False)
-def options_query():
-    """
-    Return 200 so the browser's CORS preflight can succeed.
-    """
-    return Response(status_code=200)
-
 @app.post(
     "/query",
     summary="Handle Query",
