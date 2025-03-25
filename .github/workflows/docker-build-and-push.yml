@@ -19,19 +19,18 @@ jobs:
         with:
           python-version: "3.9"
 
-      # # Cache Python dependencies to speed up installs
-      # - name: Cache Python dependencies
-      #   uses: actions/cache@v3
-      #   with:
-      #     path: ~/.cache/pip
-      #     key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-      #     restore-keys: |
-      #       ${{ runner.os }}-pip-
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-      # - name: Install dependencies
-      #   run: |
-      #     pip install --upgrade pip
-      #     pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Azure Login (Service Principal)
         uses: azure/login@v1
@@ -84,59 +83,6 @@ jobs:
             -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
             -backend-config="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}"
  
-      # Import existing resources if needed
-      # - name: Import Resource Group
-      #   run: |
-      #     terraform -chdir=infra import \
-      #       azurerm_resource_group.main \
-      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}" \
-      #       || echo "RG already imported or doesn't exist."
-
-      # - name: Import Search Service
-      #   run: |
-      #     terraform -chdir=infra import \
-      #       azurerm_search_service.search \
-      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.Search/searchServices/rag-demo-public-financial-data" \
-      #       || echo "Search Service already imported or doesn't exist."
-
-      # - name: Import Container Registry
-      #   run: |
-      #     terraform -chdir=infra import \
-      #       azurerm_container_registry.acr \
-      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.ContainerRegistry/registries/${{ secrets.PROJECT_NAME }}" \
-      #       || echo "ACR already imported or doesn't exist."
-
-      # - name: Import Key Vault
-      #   run: |
-      #     terraform -chdir=infra import \
-      #       azurerm_key_vault.kv \
-      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.KeyVault/vaults/${{ secrets.PROJECT_NAME }}-KeyVault" \
-      #       || echo "Key Vault already imported or doesn't exist."
-
-      # - name: Import Terraform User Key Vault Access Policy
-      #   run: |
-      #     TF_SP_OBJ_ID=$(az ad sp show \
-      #       --id ${{ secrets.AZURE_CLIENT_ID }} \
-      #       --query objectId -o tsv)
-      #     terraform -chdir=infra import \
-      #       azurerm_key_vault_access_policy.terraform_user \
-      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.KeyVault/vaults/${{ secrets.PROJECT_NAME }}-KeyVault/objectId/$TF_SP_OBJ_ID" \
-      #       || echo "terraform_user Key Vault Access Policy already imported or doesn't exist."
-
-      # - name: Import App Service Plan
-      #   run: |
-      #     terraform -chdir=infra import \
-      #       azurerm_app_service_plan.asp \
-      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.Web/serverFarms/${{ secrets.PROJECT_NAME }}-backend-plan" \
-      #       || echo "ASP already imported or doesn't exist."
-
-      # - name: Import Web App
-      #   run: |
-      #     terraform -chdir=infra import \
-      #       azurerm_app_service.backend \
-      #       "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP_NAME }}/providers/Microsoft.Web/sites/${{ secrets.PROJECT_NAME }}-backend" \
-      #       || echo "App Service already imported or doesn't exist."
-
       - name: Terraform Plan
         run: |
           terraform -chdir=infra plan \
