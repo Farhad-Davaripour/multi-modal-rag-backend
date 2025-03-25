@@ -175,10 +175,10 @@ def custom_openapi():
             "bearerFormat": "JWT",
         }
     }
-    # Setting global security requirements so all endpoints use it
-    for path in openapi_schema["paths"].values():
-        for method in path.values():
-            method.setdefault("security", [{"BearerAuth": []}])
+    # # Setting global security requirements so all endpoints use it
+    # for path in openapi_schema["paths"].values():
+    #     for method in path.values():
+    #         method.setdefault("security", [{"BearerAuth": []}])
     app.openapi_schema = openapi_schema
     return openapi_schema
 
