@@ -112,8 +112,8 @@ You will reference this storage account and container in the `main.tf` backend c
 
 ## 8. Security & Next Steps
 
-- Store sensitive values (like IDs and keys) in secure secret managers (e.g., GitHub Actions secrets, Azure Key Vault).
-- Consider enabling role-based access control (RBAC) for tighter security on each Azure service.
 - Integrate monitoring and logs (e.g., Application Insights) for production scenarios.
+- Add unit/integration tests to get to 70-90% code coverage.
+- Improve the indexing pipeline
 
 ```
