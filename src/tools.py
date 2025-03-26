@@ -38,6 +38,7 @@ from llama_index.core.settings import Settings
 from llama_index.core.node_parser import HierarchicalNodeParser
 from llama_index.core.retrievers import AutoMergingRetriever
 from llama_index.core import Document
+from llama_index.core.storage.docstore import SimpleDocumentStore
 
 import asyncio
 import nest_asyncio
@@ -657,134 +658,180 @@ def get_uploaded_index_n_docs_summary_n_document_url():
     
     return indexes, document_summary_dict, document_url_dict
 
-def get_index_docs_summary():
+def store_context_in_azure(storage_context: StorageContext, index_name: str):
+    """
+    Serialize storage_context's docstore to JSON and upload it to the "context-storage" container.
+    The file is named docstore_{index_name}.json
+    """
+    container_name = "context-storage"
+    file_name = f"docstore_{index_name}.json"
 
-    # Grab a reference to your SharePoint files container
+    docstore_data = storage_context.docstore.to_dict()
+
+    # 2) Convert to JSON bytes
+    docstore_json = json.dumps(docstore_data).encode('utf-8')
+    data_stream = BytesIO(docstore_json)
+
+    # 3) Create container if needed
+    blob_service_client = BlobServiceClientSync.from_connection_string(BLOB_CONNECTION_STRING)
+    container_client = blob_service_client.get_container_client(container_name)
+    if not container_client.exists():
+        container_client.create_container()
+
+    # 4) Upload docstore JSON
+    blob_client = container_client.get_blob_client(file_name)
+    blob_client.upload_blob(data_stream, overwrite=True)
+    logger.info(f"Docstore uploaded to container '{container_name}' as '{file_name}'.")
+
+
+def load_context_from_azure(index_name: str) -> Optional[dict]:
+    """
+    Download a docstore JSON from the "context-storage" container if it exists.
+    The file name is docstore_{index_name}.json
+    Return the docstore dictionary or None if not found.
+    """
+    container_name = "context-storage"
+    file_name = f"docstore_{index_name}.json"
+
+    blob_service_client = BlobServiceClientSync.from_connection_string(BLOB_CONNECTION_STRING)
+    container_client = blob_service_client.get_container_client(container_name)
+
+    if not container_client.exists():
+        logger.warning(f"Docstore container '{container_name}' does not exist.")
+        return None
+
+    blob_client = container_client.get_blob_client(file_name)
+    if not blob_client.exists():
+        logger.warning(f"No '{file_name}' found in container '{container_name}'.")
+        return None
+
+    # Download and parse JSON
+    downloaded_blob = blob_client.download_blob().readall()
+    return json.loads(downloaded_blob)
+
+def get_index_docs_summary():
     blob_service_client = BlobServiceClientSync.from_connection_string(BLOB_CONNECTION_STRING)
     container_client = blob_service_client.get_container_client(SHAREPOINT_FILES_CONTAINER)
 
-    # List all blobs (files) in the SharePoint container
-    all_blobs = container_client.list_blobs()
+    if not container_client.exists():
+        logger.error(f"SharePoint container '{SHAREPOINT_FILES_CONTAINER}' not found.")
+        return {}, {}
 
-    # Define supported extensions
+    all_blobs = container_client.list_blobs()
     SUPPORTED_EXTENSIONS = [".pdf", ".pptx"]
 
-    # Initialize the dictionary
-    document_summary_dict = {}
     document_summary_dict = load_json_dict_from_blob_storage("document_summary.json")
-    indexes = {} 
+    indexes = {}
 
-    # Loop through each file in the directory
     for blob in all_blobs:
         file_name = blob.name
         file_name_lower = file_name.lower()
-        # Process files with supported extensions
-        if any(file_name.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS): 
-            curated_file_name = os.path.splitext(file_name.lower())[0]
-            BLOB_CONTAINER_NAME = f"{curated_file_name.replace('_', '-')}"
-            logger.info(f"Blob Container Name: {BLOB_CONTAINER_NAME}")
 
-            INDEX_NAME = f"{curated_file_name.replace('-', '_')}"
+        if any(file_name_lower.endswith(ext) for ext in SUPPORTED_EXTENSIONS):
+            curated_file_name = os.path.splitext(file_name_lower)[0]
+            BLOB_CONTAINER_NAME = curated_file_name.replace('_', '-')
+            INDEX_NAME = curated_file_name.replace('-', '_')
+
             logger.info(f"Index Name: {INDEX_NAME}")
 
-            file_path = os.path.join(LOCAL_BASE_DIR, file_name)
-            images_path = os.path.join(IMAGES_DIR, curated_file_name)
-            
-            if not check_container_exists(BLOB_CONTAINER_NAME):
+            # Check if the Azure Search vector store container exists
+            # (or check if the index exists in Azure Search by name, your choice).
+            # For simplicity, let's rely on `check_container_exists` for container name
+            # or do a "check_index_exists" if you prefer (not shown here).
+            embeddings_exist = check_container_exists(BLOB_CONTAINER_NAME)
 
-                # logging.info or process the paths and container name
-                logger.info(f"File Path: {file_path}")
-                logger.info(f"Images Path: {images_path}")
-                logger.info(f"Blob Container Name: {BLOB_CONTAINER_NAME}")
+            if not embeddings_exist:
+                # CREATE THE INDEX: parse, embed, store docstore
+                logger.info(f"Embeddings container '{BLOB_CONTAINER_NAME}' not found. Creating brand new index for {INDEX_NAME}.")
+                
+                # 1) parse the file
+                temp_filepath = None
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name_lower)[1]) as temp_file:
+                        temp_filepath = temp_file.name
+                        download_stream = container_client.download_blob(file_name)
+                        temp_file.write(download_stream.readall())
 
-                # Download the blob to a temporary file to pass it to LlamaParse
-                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name_lower)[1]) as temp_file:
-                    temp_filepath = temp_file.name
-                    download_stream = container_client.download_blob(file_name)
-                    temp_file.write(download_stream.readall())
+                    md_json_list, image_dicts = get_images_from_doc(temp_filepath, IMAGES_DIR, parser)
+                    image_urls = upload_images_to_blob_storage(BLOB_CONTAINER_NAME, CONCURRENT_UPLOADS, image_dicts)
+                    sorted_urls = _get_sorted_blob_urls(image_urls)
 
-                md_json_list, image_dicts = get_images_from_doc(temp_filepath, images_path, parser)
-                image_urls = upload_images_to_blob_storage(BLOB_CONTAINER_NAME, CONCURRENT_UPLOADS, image_dicts)
+                    doc_list = []
+                    for idx, page_dict in enumerate(md_json_list):
+                        page_text = page_dict.get("md", "")
+                        doc = Document(
+                            text=page_text,
+                            metadata={
+                                "page_num": idx + 1,
+                                "image_path": sorted_urls[idx] if idx < len(sorted_urls) else None
+                            }
+                        )
+                        doc_list.append(doc)
 
-                sorted_urls = _get_sorted_blob_urls(image_urls)
+                    h_node_parser = HierarchicalNodeParser.from_defaults(chunk_sizes=[2048, 512])
+                    parsed_nodes = h_node_parser.get_nodes_from_documents(doc_list)
+                    for node in parsed_nodes:
+                        node.metadata["parsed_text_markdown"] = node.get_content()
 
-                doc_list = []
-                for idx, page_dict in enumerate(md_json_list):
-                    page_text = page_dict["md"]
-                    doc = Document(
-                        text=page_text,
-                        metadata={
-                            "page_num": idx + 1, 
-                            # you can store the image URL (below) if you want
-                            "image_path": sorted_urls[idx] if idx < len(image_urls) else None
-                        }
+                    # Summaries if needed
+                    document_content = "\n\n".join(doc.text for doc in doc_list if doc.text)
+                    summary = "No text content found."
+                    if document_content.strip():
+                        summary = llm_light_task.complete(f"summarize this text: {document_content[:8000]}").text
+                    document_summary_dict[INDEX_NAME] = summary
+
+                    # 2) Create vector store in Azure, docstore in memory
+                    vector_store = create_vector_store(index_client, INDEX_NAME, metadata_fields, use_existing_index=False)
+                    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+
+                    # add nodes to docstore
+                    storage_context.docstore.add_documents(parsed_nodes, allow_update=True)
+
+                    # 3) Build the index in memory
+                    index_obj = VectorStoreIndex(
+                        nodes=parsed_nodes,
+                        storage_context=storage_context,
+                        embed_model=embed_model,
+                        llm=llm,
+                        show_progress=True,
                     )
-                    doc_list.append(doc)
+                    indexes[INDEX_NAME] = index_obj
 
-                # 2. Use HierarchicalNodeParser on the entire doc_list once
-                h_node_parser = HierarchicalNodeParser.from_defaults(
-                    chunk_sizes=[2048, 512] # Remove 128
-                )
-                logger.info(f"Using HierarchicalNodeParser with chunk_sizes={h_node_parser.chunk_sizes}")
+                    # 4) Upload docstore to the "context-storage" container
+                    store_context_in_azure(storage_context, INDEX_NAME)
+                    logger.info(f"Successfully created new index for '{INDEX_NAME}' and stored docstore in 'context-storage' container.")
 
-                parsed_nodes = h_node_parser.get_nodes_from_documents(doc_list) # Use renamed variable
-                # 3. Fill "parsed_text_markdown" so your vector store sees the text
-                for node in parsed_nodes:
-                    node.metadata["parsed_text_markdown"] = node.get_content()      
+                finally:
+                    if temp_filepath and os.path.exists(temp_filepath):
+                        try:
+                            os.remove(temp_filepath)
+                        except OSError as e:
+                            logger.warning(f"Could not remove temp file {temp_filepath}: {e}")
 
-
-                document_content = "\n\n".join(doc.text for doc in doc_list if doc.text)
-                if document_content:
-                    summary = llm_light_task.complete(f"summarize this text: {document_content[:8000]}").text # Limit context if needed
-                else:
-                    summary = "No text content found to summarize."
-
-                # Add to dictionary
-                document_summary_dict[INDEX_NAME] = summary
-
-                # --- 8. Explicit StorageContext and Index Creation ---
-                logger.info("Creating explicit StorageContext and VectorStore...")
-                # Create vector store (will create in Azure if not exists)
-                vector_store = create_vector_store(index_client, INDEX_NAME, metadata_fields, False)
-                # Create storage context using this specific vector store
-                storage_context = StorageContext.from_defaults(vector_store=vector_store)
-                logger.info(f"Explicit StorageContext created. Docstore type: {type(storage_context.docstore)}")
-
-                # Explicitly add ALL parsed nodes (parents and children) to this context's docstore
-                # This guarantees the docstore has the nodes before the index object is finalized
-                logger.info(f"Explicitly adding {len(parsed_nodes)} nodes to in-memory docstore...")
-                storage_context.docstore.add_documents(parsed_nodes, allow_update=True)
-                logger.info(f"Nodes added to docstore. Docstore size: {len(storage_context.docstore.docs)}") # Log size
-
-                logger.info(f"Creating index object '{INDEX_NAME}' with explicit storage context...")
-                # Create the index object using the nodes already in the storage context
-                # The constructor will handle adding them to the vector store part
-                index_obj = VectorStoreIndex(
-                    nodes=parsed_nodes, # Pass nodes again - VectorStoreIndex uses this to populate vector store
-                    storage_context=storage_context, # Crucially, use the context we just populated
-                    embed_model=embed_model,
-                    llm=llm, # Pass LLM if needed by index internals (though often not for constructor)
-                    show_progress=True,
-                )
-                indexes[INDEX_NAME] = index_obj # Store the created index object
-                logger.info(f"Successfully created index '{INDEX_NAME}' with explicitly managed StorageContext.")
-                # --- End Explicit StorageContext block ---
-
-                # search_client = SearchClient(endpoint=SEARCH_SERVICE_ENDPOINT, index_name=INDEX_NAME, credential=credential)
-
-                print("===============================================")
             else:
+                # LOAD THE INDEX: load docstore from "context-storage", connect with Azure embeddings
+                logger.info(f"Embeddings for '{INDEX_NAME}' found in container '{BLOB_CONTAINER_NAME}'. Attempting to load docstore from 'context-storage'...")
+
+                docstore_data = load_context_from_azure(INDEX_NAME)
                 vector_store = create_vector_store(index_client, INDEX_NAME, metadata_fields, use_existing_index=True)
                 storage_context = StorageContext.from_defaults(vector_store=vector_store)
-                index_obj_loaded = VectorStoreIndex.from_documents(
-                    [],  # no new docs
-                    storage_context=storage_context
-                )
-                indexes[INDEX_NAME] = index_obj_loaded
-                logger.info("===============================================")
-    
-    upload_json_dict_to_blob_storage(document_summary_dict, "document_summary.json")
 
+                if docstore_data is not None:
+                    
+                    docstore_obj = SimpleDocumentStore.from_dict(docstore_data)
+                    storage_context.docstore = docstore_obj
+                    logger.info(f"Loaded docstore from 'context-storage'. Found {len(docstore_obj.docs)} docs.")
+                else:
+                    logger.warning(f"Docstore for '{INDEX_NAME}' not found in 'context-storage'. Using empty docstore...")
+
+                # Connect to embeddings with from_documents([])
+                index_obj_loaded = VectorStoreIndex.from_documents([], storage_context=storage_context)
+                indexes[INDEX_NAME] = index_obj_loaded
+
+            logger.info("===============================================")
+
+    # Save updated summary dictionary if new docs were parsed
+    upload_json_dict_to_blob_storage(document_summary_dict, "document_summary.json")
     return indexes, document_summary_dict
 
 def multimodal_query_engine(index: VectorStoreIndex):
