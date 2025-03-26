@@ -35,6 +35,9 @@ from llama_index.multi_modal_llms.azure_openai import AzureOpenAIMultiModal
 from llama_index.core.vector_stores.types import VectorStoreQueryMode
 from llama_index.core.postprocessor import SentenceTransformerRerank
 from llama_index.core.settings import Settings
+from llama_index.core.node_parser import HierarchicalNodeParser
+from llama_index.core.retrievers import AutoMergingRetriever
+from llama_index.core import Document
 
 import asyncio
 import nest_asyncio
@@ -76,7 +79,7 @@ DOCUMENT_SUMMARY_DICT_PATH = os.getenv("DOCUMENT_SUMMARY_DICT_PATH", "cached/doc
 DOCUMENT_URL_DICT_PATH = os.getenv("DOCUMENT_URL_DICT_PATH", "cached/document_url.json")
 IMAGES_DIR = os.getenv("IMAGES_DIR", "images")
 CONCURRENT_UPLOADS = int(os.getenv("CONCURRENT_UPLOADS", 5)) 
-SIMILARITY_TOP_K = int(os.getenv("SIMILARITY_TOP_K", 5))
+SIMILARITY_TOP_K = int(os.getenv("SIMILARITY_TOP_K", 10))
 SHAREPOINT_FILES_CONTAINER = os.getenv("SHAREPOINT_FILES_CONTAINER")
 METADATA_FILES_CONTAINER = os.getenv("METADATA_FILES_CONTAINER")
 
@@ -324,29 +327,6 @@ def _get_sorted_blob_urls(image_urls: Dict[str, str]) -> List[str]:
     sorted_items = sorted(image_urls.items(), key=lambda x: get_page_number(x[0]))
     return [url for _, url in sorted_items]
 
-def get_text_nodes(image_urls: Dict[str, str], json_dicts: List[dict]) -> List[TextNode]:
-    """Create TextNodes with metadata including blob URLs as image_path."""
-    nodes = []
-    
-    sorted_urls = _get_sorted_blob_urls(image_urls)
-    md_texts = [d["md"] for d in json_dicts]
-
-    for idx, md_text in enumerate(md_texts):
-        if idx >= len(sorted_urls):
-            continue
-            
-        node = TextNode(
-            text=md_text,
-            metadata={
-                "page_num": idx + 1,
-                "image_path": sorted_urls[idx],
-                "parsed_text_markdown": md_texts[idx],
-            }
-        )
-        nodes.append(node)
-
-    return nodes
-
 def create_vector_store(
     index_client,
     index_name: str,
@@ -477,8 +457,8 @@ class MultimodalQueryEngine(CustomQueryEngine):
         try:
             llm_response = self.multi_modal_llm.complete(
                 prompt=fmt_prompt,
-                # image_documents=[image_node.node for image_node in image_nodes],
-                image_documents=None
+                image_documents=[image_node.node for image_node in image_nodes],
+                # image_documents=None
             )
             logger.info("Received response from multi_modal_llm")
         except Exception as e:
@@ -724,55 +704,123 @@ def get_index_docs_summary():
                     temp_file.write(download_stream.readall())
 
                 md_json_list, image_dicts = get_images_from_doc(temp_filepath, images_path, parser)
-
                 image_urls = upload_images_to_blob_storage(BLOB_CONTAINER_NAME, CONCURRENT_UPLOADS, image_dicts)
 
-                # Create text nodes
-                text_nodes = get_text_nodes(image_urls=image_urls, json_dicts=md_json_list)
+                sorted_urls = _get_sorted_blob_urls(image_urls)
 
-                document_content = " ".join(node.get_content() for node in text_nodes)
-                summary = llm_light_task.complete(f"summarize this text: {document_content}").text
+                doc_list = []
+                for idx, page_dict in enumerate(md_json_list):
+                    page_text = page_dict["md"]
+                    doc = Document(
+                        text=page_text,
+                        metadata={
+                            "page_num": idx + 1, 
+                            # you can store the image URL (below) if you want
+                            "image_path": sorted_urls[idx] if idx < len(image_urls) else None
+                        }
+                    )
+                    doc_list.append(doc)
+
+                # 2. Use HierarchicalNodeParser on the entire doc_list once
+                h_node_parser = HierarchicalNodeParser.from_defaults(
+                    chunk_sizes=[2048, 512] # Remove 128
+                )
+                logger.info(f"Using HierarchicalNodeParser with chunk_sizes={h_node_parser.chunk_sizes}")
+
+                parsed_nodes = h_node_parser.get_nodes_from_documents(doc_list) # Use renamed variable
+                # 3. Fill "parsed_text_markdown" so your vector store sees the text
+                for node in parsed_nodes:
+                    node.metadata["parsed_text_markdown"] = node.get_content()      
+
+
+                document_content = "\n\n".join(doc.text for doc in doc_list if doc.text)
+                if document_content:
+                    summary = llm_light_task.complete(f"summarize this text: {document_content[:8000]}").text # Limit context if needed
+                else:
+                    summary = "No text content found to summarize."
 
                 # Add to dictionary
                 document_summary_dict[INDEX_NAME] = summary
 
+                # --- 8. Explicit StorageContext and Index Creation ---
+                logger.info("Creating explicit StorageContext and VectorStore...")
+                # Create vector store (will create in Azure if not exists)
+                vector_store = create_vector_store(index_client, INDEX_NAME, metadata_fields, False)
+                # Create storage context using this specific vector store
+                storage_context = StorageContext.from_defaults(vector_store=vector_store)
+                logger.info(f"Explicit StorageContext created. Docstore type: {type(storage_context.docstore)}")
+
+                # Explicitly add ALL parsed nodes (parents and children) to this context's docstore
+                # This guarantees the docstore has the nodes before the index object is finalized
+                logger.info(f"Explicitly adding {len(parsed_nodes)} nodes to in-memory docstore...")
+                storage_context.docstore.add_documents(parsed_nodes, allow_update=True)
+                logger.info(f"Nodes added to docstore. Docstore size: {len(storage_context.docstore.docs)}") # Log size
+
+                logger.info(f"Creating index object '{INDEX_NAME}' with explicit storage context...")
+                # Create the index object using the nodes already in the storage context
+                # The constructor will handle adding them to the vector store part
+                index_obj = VectorStoreIndex(
+                    nodes=parsed_nodes, # Pass nodes again - VectorStoreIndex uses this to populate vector store
+                    storage_context=storage_context, # Crucially, use the context we just populated
+                    embed_model=embed_model,
+                    llm=llm, # Pass LLM if needed by index internals (though often not for constructor)
+                    show_progress=True,
+                )
+                indexes[INDEX_NAME] = index_obj # Store the created index object
+                logger.info(f"Successfully created index '{INDEX_NAME}' with explicitly managed StorageContext.")
+                # --- End Explicit StorageContext block ---
+
                 # search_client = SearchClient(endpoint=SEARCH_SERVICE_ENDPOINT, index_name=INDEX_NAME, credential=credential)
 
-                indexes[INDEX_NAME] = create_or_load_index(
-                    text_nodes=text_nodes,
-                    index_client=index_client,
-                    index_name=INDEX_NAME,
-                    embed_model=embed_model,
-                    llm=llm,
-                    metadata_fields=metadata_fields,
-                    use_existing_index=False
-                )
                 print("===============================================")
             else:
-                indexes[INDEX_NAME] = create_or_load_index(
-                text_nodes=[],
-                index_client=index_client,
-                index_name=INDEX_NAME,
-                embed_model=embed_model,
-                llm=llm,
-                metadata_fields=metadata_fields,
-                use_existing_index=True
+                vector_store = create_vector_store(index_client, INDEX_NAME, metadata_fields, use_existing_index=True)
+                storage_context = StorageContext.from_defaults(vector_store=vector_store)
+                index_obj_loaded = VectorStoreIndex.from_documents(
+                    [],  # no new docs
+                    storage_context=storage_context
                 )
-                logger.info(f"{INDEX_NAME} already exists")
-
+                indexes[INDEX_NAME] = index_obj_loaded
                 logger.info("===============================================")
     
     upload_json_dict_to_blob_storage(document_summary_dict, "document_summary.json")
 
     return indexes, document_summary_dict
 
-def multimodal_query_engine(index):
-    query_engine = MultimodalQueryEngine(
-        retriever=index.as_retriever(
-            vector_store_query_mode=VectorStoreQueryMode.DEFAULT,
-            similarity_top_k=SIMILARITY_TOP_K,
-        ),
-        multi_modal_llm=azure_openai_mm_llm,
-        reranker_top_n=3,  # Specify the number of nodes to consider after reranking
+def multimodal_query_engine(index: VectorStoreIndex):
+    """
+    Creates a MultimodalQueryEngine using an AutoMergingRetriever.
+    """
+    logger.info("Initializing MultimodalQueryEngine with AutoMergingRetriever.")
+    
+    storage_context = index.storage_context
+    
+    base_retriever_k = SIMILARITY_TOP_K
+    logger.info(f"Base chunk retriever k: {base_retriever_k}")
+
+    base_retriever = index.as_retriever(
+        vector_store_query_mode=VectorStoreQueryMode.DEFAULT,
+        similarity_top_k=base_retriever_k,
     )
+
+    simple_merge_ratio = 0.5
+    logger.info(f"AutoMergingRetriever simple_ratio_thresh: {simple_merge_ratio}")
+    merging_retriever = AutoMergingRetriever(
+        vector_retriever=base_retriever,
+        storage_context=storage_context,
+        simple_ratio_thresh=simple_merge_ratio, # Pass the FLOAT RATIO here
+        verbose=True
+    )
+
+    logger.info("AutoMergingRetriever created.")
+
+    reranker_top_n = 3
+    logger.info(f"Reranker top_n: {reranker_top_n}")
+    query_engine = MultimodalQueryEngine(
+        retriever=merging_retriever,
+        multi_modal_llm=azure_openai_mm_llm,
+        qa_prompt=QA_PROMPT,
+        reranker_top_n=reranker_top_n,
+    )
+
     return query_engine
