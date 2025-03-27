@@ -48,7 +48,7 @@ resource "azurerm_search_service" "search" {
   name                = "${coalesce(var.env_map["PROJECT_NAME"], "default-project")}-ai-search"
   resource_group_name = azurerm_resource_group.main.name
   location            = "canadacentral"
-  sku                 = "free"
+  sku                 = "basic"
 }
 
 #####################################################
