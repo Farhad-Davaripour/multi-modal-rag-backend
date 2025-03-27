@@ -389,7 +389,7 @@ class MultimodalQueryEngine(CustomQueryEngine):
     def __init__(
         self,
         qa_prompt: Optional[PromptTemplate] = None,
-        reranker_top_n: int = 3,  # Default top_n for reranker
+        reranker_top_n: int = 5,
         **kwargs,
     ) -> None:
         """Initialize."""
@@ -458,8 +458,8 @@ class MultimodalQueryEngine(CustomQueryEngine):
         try:
             llm_response = self.multi_modal_llm.complete(
                 prompt=fmt_prompt,
-                image_documents=[image_node.node for image_node in image_nodes],
-                # image_documents=None
+                # image_documents=[image_node.node for image_node in image_nodes],
+                image_documents=None
             )
             logger.info("Received response from multi_modal_llm")
         except Exception as e:
@@ -734,20 +734,19 @@ def get_index_docs_summary():
 
             logger.info(f"Index Name: {INDEX_NAME}")
 
-            # Check if the Azure Search vector store container exists
-            # (or check if the index exists in Azure Search by name, your choice).
-            # For simplicity, let's rely on `check_container_exists` for container name
-            # or do a "check_index_exists" if you prefer (not shown here).
             embeddings_exist = check_container_exists(BLOB_CONTAINER_NAME)
 
             if not embeddings_exist:
-                # CREATE THE INDEX: parse, embed, store docstore
-                logger.info(f"Embeddings container '{BLOB_CONTAINER_NAME}' not found. Creating brand new index for {INDEX_NAME}.")
-                
-                # 1) parse the file
+                logger.info(
+                    f"Embeddings container '{BLOB_CONTAINER_NAME}' not found. "
+                    f"Creating brand new index for {INDEX_NAME}."
+                )
+
                 temp_filepath = None
                 try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name_lower)[1]) as temp_file:
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=os.path.splitext(file_name_lower)[1]
+                    ) as temp_file:
                         temp_filepath = temp_file.name
                         download_stream = container_client.download_blob(file_name)
                         temp_file.write(download_stream.readall())
@@ -768,26 +767,26 @@ def get_index_docs_summary():
                         )
                         doc_list.append(doc)
 
-                    h_node_parser = HierarchicalNodeParser.from_defaults(chunk_sizes=[2048, 512])
+                    chunk_sizes_list = [1024, 256]
+                    h_node_parser = HierarchicalNodeParser.from_defaults(chunk_sizes=chunk_sizes_list)
                     parsed_nodes = h_node_parser.get_nodes_from_documents(doc_list)
                     for node in parsed_nodes:
                         node.metadata["parsed_text_markdown"] = node.get_content()
 
-                    # Summaries if needed
                     document_content = "\n\n".join(doc.text for doc in doc_list if doc.text)
                     summary = "No text content found."
                     if document_content.strip():
-                        summary = llm_light_task.complete(f"summarize this text: {document_content[:8000]}").text
+                        summary = llm_light_task.complete(
+                            f"summarize this text: {document_content[:8000]}"
+                        ).text
                     document_summary_dict[INDEX_NAME] = summary
 
-                    # 2) Create vector store in Azure, docstore in memory
-                    vector_store = create_vector_store(index_client, INDEX_NAME, metadata_fields, use_existing_index=False)
+                    vector_store = create_vector_store(
+                        index_client, INDEX_NAME, metadata_fields, use_existing_index=False
+                    )
                     storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-                    # add nodes to docstore
                     storage_context.docstore.add_documents(parsed_nodes, allow_update=True)
 
-                    # 3) Build the index in memory
                     index_obj = VectorStoreIndex(
                         nodes=parsed_nodes,
                         storage_context=storage_context,
@@ -797,10 +796,11 @@ def get_index_docs_summary():
                     )
                     indexes[INDEX_NAME] = index_obj
 
-                    # 4) Upload docstore to the "context-storage" container
                     store_context_in_azure(storage_context, INDEX_NAME)
-                    logger.info(f"Successfully created new index for '{INDEX_NAME}' and stored docstore in 'context-storage' container.")
-
+                    logger.info(
+                        f"Successfully created new index for '{INDEX_NAME}' "
+                        f"and stored docstore in 'context-storage' container."
+                    )
                 finally:
                     if temp_filepath and os.path.exists(temp_filepath):
                         try:
@@ -809,28 +809,35 @@ def get_index_docs_summary():
                             logger.warning(f"Could not remove temp file {temp_filepath}: {e}")
 
             else:
-                # LOAD THE INDEX: load docstore from "context-storage", connect with Azure embeddings
-                logger.info(f"Embeddings for '{INDEX_NAME}' found in container '{BLOB_CONTAINER_NAME}'. Attempting to load docstore from 'context-storage'...")
+                logger.info(
+                    f"Embeddings for '{INDEX_NAME}' found in container '{BLOB_CONTAINER_NAME}'. "
+                    f"Attempting to load docstore from 'context-storage'..."
+                )
 
                 docstore_data = load_context_from_azure(INDEX_NAME)
-                vector_store = create_vector_store(index_client, INDEX_NAME, metadata_fields, use_existing_index=True)
+                vector_store = create_vector_store(
+                    index_client, INDEX_NAME, metadata_fields, use_existing_index=True
+                )
                 storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
                 if docstore_data is not None:
-                    
                     docstore_obj = SimpleDocumentStore.from_dict(docstore_data)
                     storage_context.docstore = docstore_obj
-                    logger.info(f"Loaded docstore from 'context-storage'. Found {len(docstore_obj.docs)} docs.")
+                    logger.info(
+                        f"Loaded docstore from 'context-storage'. "
+                        f"Found {len(docstore_obj.docs)} docs."
+                    )
                 else:
-                    logger.warning(f"Docstore for '{INDEX_NAME}' not found in 'context-storage'. Using empty docstore...")
+                    logger.warning(
+                        f"Docstore for '{INDEX_NAME}' not found in 'context-storage'. "
+                        f"Using empty docstore..."
+                    )
 
-                # Connect to embeddings with from_documents([])
                 index_obj_loaded = VectorStoreIndex.from_documents([], storage_context=storage_context)
                 indexes[INDEX_NAME] = index_obj_loaded
 
             logger.info("===============================================")
 
-    # Save updated summary dictionary if new docs were parsed
     upload_json_dict_to_blob_storage(document_summary_dict, "document_summary.json")
     return indexes, document_summary_dict
 
@@ -861,7 +868,7 @@ def multimodal_query_engine(index: VectorStoreIndex):
 
     logger.info("AutoMergingRetriever created.")
 
-    reranker_top_n = 3
+    reranker_top_n = 5
     logger.info(f"Reranker top_n: {reranker_top_n}")
     query_engine = MultimodalQueryEngine(
         retriever=merging_retriever,
