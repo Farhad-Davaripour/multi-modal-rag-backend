@@ -66,68 +66,68 @@ jobs:
         run: docker push ${{ secrets.PROJECT_NAME }}.azurecr.io/fastapi-app:v1
 
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.4.5
+      # - name: Set up Terraform
+      #   uses: hashicorp/setup-terraform@v2
+      #   with:
+      #     terraform_version: 1.4.5
 
-      - name: Export Azure env vars for Terraform
-        run: |
-          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
-          echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=${{ secrets.TENANT_ID }}" >> $GITHUB_ENV
-          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+      # - name: Export Azure env vars for Terraform
+      #   run: |
+      #     echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+      #     echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
+      #     echo "ARM_TENANT_ID=${{ secrets.TENANT_ID }}" >> $GITHUB_ENV
+      #     echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
 
-      - name: Terraform Init
-        run: |
-          terraform -chdir=infra init \
-            -backend-config="resource_group_name=${{ secrets.RESOURCE_GROUP_NAME }}" \
-            -backend-config="storage_account_name=${{ secrets.STORAGE_ACCOUNT_NAME }}" \
-            -backend-config="container_name=tfstate" \
-            -backend-config="key=terraform.state" \
-            -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -backend-config="tenant_id=${{ secrets.TENANT_ID }}" \
-            -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -backend-config="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}"
+      # - name: Terraform Init
+      #   run: |
+      #     terraform -chdir=infra init \
+      #       -backend-config="resource_group_name=${{ secrets.RESOURCE_GROUP_NAME }}" \
+      #       -backend-config="storage_account_name=${{ secrets.STORAGE_ACCOUNT_NAME }}" \
+      #       -backend-config="container_name=tfstate" \
+      #       -backend-config="key=terraform.state" \
+      #       -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+      #       -backend-config="tenant_id=${{ secrets.TENANT_ID }}" \
+      #       -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+      #       -backend-config="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}"
  
-      - name: Terraform Plan
-        run: |
-          terraform -chdir=infra plan \
-            -var="env_map={
-              APP_REGISTRATION_CLIENT_ID=\"${{ secrets.APP_REGISTRATION_CLIENT_ID }}\",
-              APP_REGISTRATION_CLIENT_SECRET=\"${{ secrets.APP_REGISTRATION_CLIENT_SECRET }}\",
-              APP_REGISTRATION_RESOURCE_SCOPE=\"${{ secrets.APP_REGISTRATION_RESOURCE_SCOPE }}\",
-              AUD=\"${{ secrets.AUD }}\",
-              AZURE_OPENAI_API_KEY=\"${{ secrets.AZURE_OPENAI_API_KEY }}\",
-              AZURE_OPENAI_CHAT_COMPLETION_DEPLOYED_MODEL_NAME=\"${{ secrets.AZURE_OPENAI_CHAT_COMPLETION_DEPLOYED_MODEL_NAME }}\",
-              AZURE_OPENAI_EMBEDDING_DEPLOYED_MODEL_NAME=\"${{ secrets.AZURE_OPENAI_EMBEDDING_DEPLOYED_MODEL_NAME }}\",
-              AZURE_OPENAI_ENDPOINT=\"${{ secrets.AZURE_OPENAI_ENDPOINT }}\",
-              AZURE_SEARCH_ADMIN_KEY=\"${{ secrets.AZURE_SEARCH_ADMIN_KEY }}\",
-              AZURE_SEARCH_SERVICE_ENDPOINT=\"${{ secrets.AZURE_SEARCH_SERVICE_ENDPOINT }}\",
-              BASE_FOLDER=\"${{ secrets.BASE_FOLDER }}\",
-              BLOB_CONNECTION_STRING=\"${{ secrets.BLOB_CONNECTION_STRING }}\",
-              BLOB_STORAGE_ACCOUNT_KEY=\"${{ secrets.BLOB_STORAGE_ACCOUNT_KEY }}\",
-              CLIENT_ID=\"${{ secrets.CLIENT_ID }}\",
-              CLIENT_SECRET=\"${{ secrets.CLIENT_SECRET }}\",
-              CONCURRENT_UPLOADS=\"${{ secrets.CONCURRENT_UPLOADS }}\",
-              DOCUMENT_SUMMARY_DICT_PATH=\"${{ secrets.DOCUMENT_SUMMARY_DICT_PATH }}\",
-              DOCUMENT_URL_DICT_PATH=\"${{ secrets.DOCUMENT_URL_DICT_PATH }}\",
-              IMAGES_DIR=\"${{ secrets.IMAGES_DIR }}\",
-              LLAMA_CLOUD_API_KEY=\"${{ secrets.LLAMA_CLOUD_API_KEY }}\",
-              LOCAL_BASE_DIR=\"${{ secrets.LOCAL_BASE_DIR }}\",
-              METADATA_FILES_CONTAINER=\"${{ secrets.METADATA_FILES_CONTAINER }}\",
-              PROJECT_NAME=\"${{ secrets.PROJECT_NAME }}\",
-              RESOURCE_GROUP_NAME=\"${{ secrets.RESOURCE_GROUP_NAME }}\",
-              AZURE_SUBSCRIPTION_ID=\"${{ secrets.AZURE_SUBSCRIPTION_ID }}\",
-              AZURE_CLIENT_ID=\"${{ secrets.AZURE_CLIENT_ID }}\",
-              AZURE_CLIENT_SECRET=\"${{ secrets.AZURE_CLIENT_SECRET }}\",
-              SHAREPOINT_DOMAIN=\"${{ secrets.SHAREPOINT_DOMAIN }}\",
-              SHAREPOINT_FILES_CONTAINER=\"${{ secrets.SHAREPOINT_FILES_CONTAINER }}\",
-              SHAREPOINT_SITE=\"${{ secrets.SHAREPOINT_SITE }}\",
-              SIMILARITY_TOP_K=\"${{ secrets.SIMILARITY_TOP_K }}\",
-              TENANT_ID=\"${{ secrets.TENANT_ID }}\"
-            }" \
-            -out=tfplan
+      # - name: Terraform Plan
+      #   run: |
+      #     terraform -chdir=infra plan \
+      #       -var="env_map={
+      #         APP_REGISTRATION_CLIENT_ID=\"${{ secrets.APP_REGISTRATION_CLIENT_ID }}\",
+      #         APP_REGISTRATION_CLIENT_SECRET=\"${{ secrets.APP_REGISTRATION_CLIENT_SECRET }}\",
+      #         APP_REGISTRATION_RESOURCE_SCOPE=\"${{ secrets.APP_REGISTRATION_RESOURCE_SCOPE }}\",
+      #         AUD=\"${{ secrets.AUD }}\",
+      #         AZURE_OPENAI_API_KEY=\"${{ secrets.AZURE_OPENAI_API_KEY }}\",
+      #         AZURE_OPENAI_CHAT_COMPLETION_DEPLOYED_MODEL_NAME=\"${{ secrets.AZURE_OPENAI_CHAT_COMPLETION_DEPLOYED_MODEL_NAME }}\",
+      #         AZURE_OPENAI_EMBEDDING_DEPLOYED_MODEL_NAME=\"${{ secrets.AZURE_OPENAI_EMBEDDING_DEPLOYED_MODEL_NAME }}\",
+      #         AZURE_OPENAI_ENDPOINT=\"${{ secrets.AZURE_OPENAI_ENDPOINT }}\",
+      #         AZURE_SEARCH_ADMIN_KEY=\"${{ secrets.AZURE_SEARCH_ADMIN_KEY }}\",
+      #         AZURE_SEARCH_SERVICE_ENDPOINT=\"${{ secrets.AZURE_SEARCH_SERVICE_ENDPOINT }}\",
+      #         BASE_FOLDER=\"${{ secrets.BASE_FOLDER }}\",
+      #         BLOB_CONNECTION_STRING=\"${{ secrets.BLOB_CONNECTION_STRING }}\",
+      #         BLOB_STORAGE_ACCOUNT_KEY=\"${{ secrets.BLOB_STORAGE_ACCOUNT_KEY }}\",
+      #         CLIENT_ID=\"${{ secrets.CLIENT_ID }}\",
+      #         CLIENT_SECRET=\"${{ secrets.CLIENT_SECRET }}\",
+      #         CONCURRENT_UPLOADS=\"${{ secrets.CONCURRENT_UPLOADS }}\",
+      #         DOCUMENT_SUMMARY_DICT_PATH=\"${{ secrets.DOCUMENT_SUMMARY_DICT_PATH }}\",
+      #         DOCUMENT_URL_DICT_PATH=\"${{ secrets.DOCUMENT_URL_DICT_PATH }}\",
+      #         IMAGES_DIR=\"${{ secrets.IMAGES_DIR }}\",
+      #         LLAMA_CLOUD_API_KEY=\"${{ secrets.LLAMA_CLOUD_API_KEY }}\",
+      #         LOCAL_BASE_DIR=\"${{ secrets.LOCAL_BASE_DIR }}\",
+      #         METADATA_FILES_CONTAINER=\"${{ secrets.METADATA_FILES_CONTAINER }}\",
+      #         PROJECT_NAME=\"${{ secrets.PROJECT_NAME }}\",
+      #         RESOURCE_GROUP_NAME=\"${{ secrets.RESOURCE_GROUP_NAME }}\",
+      #         AZURE_SUBSCRIPTION_ID=\"${{ secrets.AZURE_SUBSCRIPTION_ID }}\",
+      #         AZURE_CLIENT_ID=\"${{ secrets.AZURE_CLIENT_ID }}\",
+      #         AZURE_CLIENT_SECRET=\"${{ secrets.AZURE_CLIENT_SECRET }}\",
+      #         SHAREPOINT_DOMAIN=\"${{ secrets.SHAREPOINT_DOMAIN }}\",
+      #         SHAREPOINT_FILES_CONTAINER=\"${{ secrets.SHAREPOINT_FILES_CONTAINER }}\",
+      #         SHAREPOINT_SITE=\"${{ secrets.SHAREPOINT_SITE }}\",
+      #         SIMILARITY_TOP_K=\"${{ secrets.SIMILARITY_TOP_K }}\",
+      #         TENANT_ID=\"${{ secrets.TENANT_ID }}\"
+      #       }" \
+      #       -out=tfplan
 
-      - name: Terraform Apply
-        run: terraform -chdir=infra apply -auto-approve tfplan
+      # - name: Terraform Apply
+      #   run: terraform -chdir=infra apply -auto-approve tfplan
