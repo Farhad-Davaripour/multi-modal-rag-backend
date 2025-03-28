@@ -621,7 +621,6 @@ def download_sharepoint_files():
     return document_url_dict
 
 def get_uploaded_index_n_docs_summary_n_document_url():
-
     # Grab a reference to your SharePoint files container
     blob_service_client = BlobServiceClientSync.from_connection_string(BLOB_CONNECTION_STRING)
     container_client = blob_service_client.get_container_client(SHAREPOINT_FILES_CONTAINER)
@@ -632,30 +631,46 @@ def get_uploaded_index_n_docs_summary_n_document_url():
     # Define supported extensions
     SUPPORTED_EXTENSIONS = [".pdf", ".pptx"]
 
-    indexes = {} 
+    indexes = {}
 
     # Loop through each file in the directory
     for blob in all_blobs:
         file_name = blob.name
 
-        if any(file_name.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS): 
+        if any(file_name.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS):
             curated_file_name = os.path.splitext(file_name.lower())[0]
             INDEX_NAME = f"{curated_file_name.replace('-', '_')}"
             logger.info(f"Index Name: {INDEX_NAME}")
 
-            indexes[INDEX_NAME] = create_or_load_index(
-            text_nodes=[],
-            index_client=index_client,
-            index_name=INDEX_NAME,
-            embed_model=embed_model,
-            llm=llm,
-            metadata_fields=metadata_fields,
-            use_existing_index=True
+            # Create or load index
+            index_obj = create_or_load_index(
+                text_nodes=[],
+                index_client=index_client,
+                index_name=INDEX_NAME,
+                embed_model=embed_model,
+                llm=llm,
+                metadata_fields=metadata_fields,
+                use_existing_index=True
             )
+
+            # Load docstore
+            docstore_data = load_context_from_azure(INDEX_NAME)
+            if docstore_data is not None:
+                docstore_obj = SimpleDocumentStore.from_dict(docstore_data)
+                index_obj.storage_context.docstore = docstore_obj
+                logger.info(
+                    f"Loaded docstore from 'context-storage'. Found {len(docstore_obj.docs)} docs."
+                )
+            else:
+                logger.warning(
+                    f"Docstore for '{INDEX_NAME}' not found in 'context-storage'. Using empty docstore..."
+                )
+
+            indexes[INDEX_NAME] = index_obj
 
     document_summary_dict = load_json_dict_from_blob_storage("document_summary.json")
     document_url_dict = load_json_dict_from_blob_storage("document_url.json")
-    
+
     return indexes, document_summary_dict, document_url_dict
 
 def store_context_in_azure(storage_context: StorageContext, index_name: str):
