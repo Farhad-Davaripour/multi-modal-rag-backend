@@ -11,6 +11,12 @@ variable "env_map" {
 # A. Remote Backend Configuration
 #####################################################
 terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.90" # Or your desired stable 3.x constraint
+    }
+  }
   backend "azurerm" {
     resource_group_name  = var.env_map["RESOURCE_GROUP_NAME"] 
     storage_account_name = "tfstatestorageacnt"  # The one you created manually
